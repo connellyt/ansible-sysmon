@@ -1,0 +1,78 @@
+---
+- name: Install Sysmon or Update Configuration File
+  hosts: MemberServers,Workstations 
+  vars: 
+    ansible_password: "{{ vault_ansible_password }}"
+    sysmon_version: "13.20"
+  tasks:
+    - name: Check to see if Sysmon is at the latest version already
+      win_file_version:
+        path: C:\Windows\Sysmon64.exe
+      register: installed_version
+      ignore_errors: true
+
+    - debug:
+        var: installed_version.win_file_version.product_version
+
+    - name: Remove Sysmon if already installed
+      block:
+    
+        - name: Stop Sysmon and Sysmon driver
+          win_command: net "{{ item.state }}" "{{ item.object }}"
+          loop:
+            - { state: stop, object: sysmon64 }
+            - { state: stop, object: sysmondrv }
+          
+        - name: uninstall Sysmon
+          win_command: C:\Windows\Sysmon64.exe -u force
+        
+        - name: delete Sysmon file
+          win_file:
+            path: C:\Windows\Sysmon64.exe
+            state: absent
+      when: (installed_version.win_file_version.product_version is defined and installed_version.win_file_version.product_version != sysmon_version)
+
+    - name: Install Sysmon
+      block:
+        - name: Copy installation file to SoftwareInstallFiles
+          win_copy:
+            src: /opt/software/sysmon/Sysmon64.exe
+            dest: C:\SoftwareInstallFiles\Sysmon64.exe
+
+        - name: Copy sysmon config file to C:\Windows
+          win_copy:
+            src: /opt/software/sysmon/sysmonconfig-export.xml
+            dest: C:\Windows\sysmonconfig-export.xml
+
+        - name: Install sysmon
+          win_command: C:\SoftwareInstallFiles\Sysmon64.exe -accepteula -i C:\Windows\sysmonconfig-export.xml
+          args:
+            creates: C:\Windows\Sysmon64.exe
+  
+        - name: Check to see if Sysmon is at the latest version already
+          win_file_version:
+            path: C:\Windows\Sysmon64.exe
+          register: installed_version_check
+          ignore_errors: true
+
+        - debug:
+            var: installed_version_check.win_file_version.product_version
+
+        - name: Cleanup install file
+          win_file:
+            path: C:\SoftwareInstallFiles\Sysmon64.exe
+            state: absent
+      when: (installed_version.win_file_version.product_version is defined and installed_version.win_file_version.product_version != sysmon_version) or (installed_version.win_file_version.product_version is not defined)
+
+    - name: Update sysmon config if not installing
+      block:
+        - name: Copy sysmon config file to C:\Windows
+          win_copy:
+            src: /opt/software/sysmon/sysmonconfig-export.xml
+            dest: C:\Windows\sysmonconfig-export.xml
+          register: sysmonconfig
+
+        - name: Update sysmon config
+          win_command: C:\Windows\sysmon64.exe -c C:\Windows\sysmonconfig-export.xml
+          when: sysmonconfig.changed
+      when: (installed_version.win_file_version.product_version is defined and installed_version.win_file_version.product_version == sysmon_version)
